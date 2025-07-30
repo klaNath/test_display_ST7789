@@ -1,0 +1,1 @@
+C:/Users/kazusa/OneDrive - FlexWorks/rp/micropython/test_display_ST7789/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py

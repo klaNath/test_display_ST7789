@@ -1,0 +1,21 @@
+{
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none"
+    },
+    "python.terminal.activateEnvironment": false,
+    "micropico.openOnStart": true,
+    "python.analysis.typeshedPaths": [
+        "~/.micropico-stubs/included",
+        "${workspaceFolder}/tempe/src",
+        "${workspaceFolder}/micropython-lib/micropython/drivers/display/ssd1306/",
+        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py"
+    ],
+    "python.analysis.extraPaths": [
+        "~/.micropico-stubs/included",
+        "${workspaceFolder}/tempe/src",
+        "${workspaceFolder}/micropython-lib/micropython/drivers/display/ssd1306/",
+        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py"
+    ]
+}
