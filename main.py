@@ -8,24 +8,32 @@ import micropython
 
 micropython.alloc_emergency_exception_buf(100)
 
-__str_array = const(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+__str_array = const(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ') #For GridLocator Calc
 
+# Lock And EventFlag for asyncio
 gnss_newchar = asyncio.Event()
 readbuf_lock = asyncio.Lock()
 oled_lock = asyncio.Lock()
 gnss_updatenow = asyncio.Event()
 pps_irq_flag = asyncio.ThreadSafeFlag()
-rtc = RTC()
-td_jst_wDelay = datetime.timedelta(hours=9, seconds=1)
 
+#datetime service variables
+td_jst_wDelay = datetime.timedelta(hours=9, seconds=1) # add 1sec Delay for display
+
+# Running Mode Config
+config_atFirst = False
 uart_outputnmea = False
 
+#Tweak MicropyGPS GSV Parser
 MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
 
+# Pin ISR for Syncronize to PPS signal
 def detectPPS(Pin):
     pps_irq_flag.set()
 
+# Pin and IRQ setting
 gnss_resetn = Pin(6, Pin.OUT)
+fix_led = Pin("LED", Pin.OUT)
 pps_pin = Pin(22, Pin.IN)
 pps_pin.irq(trigger=Pin.IRQ_RISING, handler=detectPPS)
 
@@ -62,26 +70,34 @@ def lat_lon_string(lat_lon):
     d, dm, hemi = lat_lon
     return f'{d:3d} {dm:06.03f}{min}{hemi}'
 
+sg = bytearray(8)
 def gridlocator_calc(lat, lon):
-    sg = bytearray(8)
     d_lat, dm_lat, hemi = lat
     d_lon, dm_lon, hemi = lon
     gf_lat = (d_lat + dm_lat/60 + 90)/10
     gf_lon = (d_lon + dm_lon/60 + 180)/20
-    sg[0] = __str_array[math.floor(gf_lon)]
-    sg[1] = __str_array[math.floor(gf_lat)]
-    gf_lat = (gf_lat - math.floor(gf_lat))*10
-    gf_lon = (gf_lon - math.floor(gf_lon))*10
-    sg[2] = math.floor(gf_lon) + 0x30
-    sg[3] = math.floor(gf_lat) + 0x30
-    gf_lat = (gf_lat - math.floor(gf_lat))*24
-    gf_lon = (gf_lon - math.floor(gf_lon))*24
-    sg[4] = __str_array[math.floor(gf_lon)]
-    sg[5] = __str_array[math.floor(gf_lat)]
-    gf_lat = (gf_lat - math.floor(gf_lat))*10
-    gf_lon = (gf_lon - math.floor(gf_lon))*10
-    sg[6] = math.floor(gf_lon) + 0x30
-    sg[7] = math.floor(gf_lat) + 0x30
+    gf_lat_int = int(gf_lat)
+    gf_lon_int = int(gf_lon)
+    sg[0] = __str_array[gf_lon_int]
+    sg[1] = __str_array[gf_lat_int]
+    gf_lat = (gf_lat - gf_lat_int)*10
+    gf_lon = (gf_lon - gf_lon_int)*10
+    gf_lat_int = int(gf_lat)
+    gf_lon_int = int(gf_lon)
+    sg[2] = gf_lon_int + 0x30
+    sg[3] = gf_lat_int + 0x30
+    gf_lat = (gf_lat - gf_lat_int)*24
+    gf_lon = (gf_lon - gf_lon_int)*24
+    gf_lat_int = int(gf_lat)
+    gf_lon_int = int(gf_lon)
+    sg[4] = __str_array[gf_lon_int]
+    sg[5] = __str_array[gf_lat_int]
+    gf_lat = (gf_lat - gf_lat_int)*10
+    gf_lon = (gf_lon - gf_lon_int)*10
+    gf_lat_int = int(gf_lat)
+    gf_lon_int = int(gf_lon)
+    sg[6] = gf_lon_int + 0x30
+    sg[7] = gf_lat_int + 0x30
     #print(str(sg, 'UTF-8'))
     return sg
 
@@ -104,7 +120,7 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
     lat = '000 00.000''N'
     lon = '000 00.000''E'
     gl = b'XX00XX00'
-    fix_led = Pin("LED", Pin.OUT)
+
     fix_led.value(0)
     while True:
         await gnss_updatenow.wait()
@@ -183,7 +199,6 @@ def main():
 
     gnss_reciever = MicropyGPS()
 
-    config_atFirst = False
     if config_atFirst: 
         uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n') # Set Positioning Constelation to GPS+GLONASS+GALILEO+QZSS
         uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
