@@ -10,12 +10,14 @@
         "~/.micropico-stubs/included",
         "${workspaceFolder}/tempe/src",
         "${workspaceFolder}/micropython-lib/micropython/drivers/display/ssd1306/",
-        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py"
+        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py",
+        "${workspaceFolder}/micropython-lib/python-stdlib/datetimedatetime.py"
     ],
     "python.analysis.extraPaths": [
         "~/.micropico-stubs/included",
         "${workspaceFolder}/tempe/src",
         "${workspaceFolder}/micropython-lib/micropython/drivers/display/ssd1306/",
-        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py"
+        "${workspaceFolder}/micropython-lib/micropython/drivers/storage/sdcard/sdcard.py",
+        "${workspaceFolder}/micropython-lib/python-stdlib/datetimedatetime.py"
     ]
 }

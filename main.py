@@ -16,7 +16,9 @@ oled_lock = asyncio.Lock()
 gnss_updatenow = asyncio.Event()
 pps_irq_flag = asyncio.ThreadSafeFlag()
 rtc = RTC()
-td_jst = datetime.timedelta(hours=9)
+td_jst_wDelay = datetime.timedelta(hours=9, seconds=1)
+
+uart_outputnmea = False
 
 MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
 
@@ -31,18 +33,19 @@ async def uart_readgnss(uart: UART,buf: collections.deque):
     while True:
         if uart.any():
             s = uart.read()
-            try:
-                str_utf = str(s, 'UTF-8', "")
-                print(str_utf, end="")
-            except Exception as e:
-                print(e)
-
             if s is not None:
                 await readbuf_lock.acquire()
                 buf.extend(bytearray(s))
                 readbuf_lock.release()
                 gnss_newchar.set()
-        await asyncio.sleep_ms(10)
+                if uart_outputnmea:
+                    try:
+                        str_utf = str(s, 'UTF-8', "")
+                        print(str_utf, end="")
+                    except Exception as e:
+                        print(e)
+                        
+        await asyncio.sleep_ms(20)
 
 async def gnss_update(gnss: MicropyGPS, buf: collections.deque):
     while True:
@@ -88,7 +91,7 @@ def datetime_toJST(gnss_date, timestamp, offset):
     year = int(gnss_date[2])+2000
     hour, minutes, seconds = timestamp
     #rtc.datetime((year, month, day, 0, hour, minutes, int(seconds), 0))
-    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+td_jst
+    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+td_jst_wDelay
     #print(dt_now_jst)
     dateobj = dt_now_jst.date()
     datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
@@ -132,7 +135,7 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(f'Lon:{lon}', 0, 8)
         oled.text(dt_now, 8, 16)
         oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
-        oled.text(f'PDOP:{gnss.pdop:2.1f}',0,32)
+        oled.text(f'HDOP:{gnss.hdop: 2.1f}',0,32)
         oled.text(str(gl, 'UTF-8'), 32, 56)
         oled_lock.release()
         gnss_updatenow.clear()
