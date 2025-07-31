@@ -131,8 +131,9 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(f'Lat:{lat}', 0, 0)
         oled.text(f'Lon:{lon}', 0, 8)
         oled.text(dt_now, 8, 16)
-        oled.text(f'FIX:{gnss.fix_type} Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
-        oled.text(str(gl, 'UTF-8'), 32, 48)
+        oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
+        oled.text(f'PDOP:{gnss.pdop:2.1f}',0,32)
+        oled.text(str(gl, 'UTF-8'), 32, 56)
         oled_lock.release()
         gnss_updatenow.clear()
         
@@ -149,6 +150,12 @@ async def display_sync(oled:ssd1306.SSD1306_I2C):
         pps_irq_flag.clear()
         machine.enable_irq(state)
 
+async def gc_coro():
+    gc.enable()
+    while True:
+        gc.collect()
+        gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())
+        await asyncio.sleep(5)
 
 async def gnss_read(uart: UART, gnss: MicropyGPS):
     gc.collect()
@@ -162,7 +169,8 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
         uart_readgnss(uart, buf),
         gnss_update(gnss, buf),
         display_update(gnss, oled),
-        display_sync(oled)
+        display_sync(oled),
+        gc_coro()
     )
 
 
