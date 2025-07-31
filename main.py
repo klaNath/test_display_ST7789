@@ -18,7 +18,7 @@ pps_irq_flag = asyncio.ThreadSafeFlag()
 rtc = RTC()
 td_jst = datetime.timedelta(hours=9)
 
-MicropyGPS.supported_sentences['QZGSV'] = MicropyGPS.gpgsv
+MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
 
 def detectPPS(Pin):
     pps_irq_flag.set()
@@ -33,7 +33,7 @@ async def uart_readgnss(uart: UART,buf: collections.deque):
             s = uart.read()
             try:
                 str_utf = str(s, 'UTF-8', "")
-                #print(str_utf, end="")
+                print(str_utf, end="")
             except Exception as e:
                 print(e)
 
@@ -82,8 +82,6 @@ def gridlocator_calc(lat, lon):
     #print(str(sg, 'UTF-8'))
     return sg
 
-
-
 def datetime_toJST(gnss_date, timestamp, offset):
     day = int(gnss_date[0])
     month = int(gnss_date[1])
@@ -128,12 +126,12 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
             #print('Horizontal Dilution of Precision:', gnss.hdop)
             #print()
         oled.fill(0)
-        QZSS_prns = [x for x in gnss.satellites_used if x >= 184]
+        #QZSS_prns = [x for x in gnss.satellites_used if x >= 184]
         await oled_lock.acquire()
         oled.text(f'Lat:{lat}', 0, 0)
         oled.text(f'Lon:{lon}', 0, 8)
-        oled.text(' '+dt_now, 0, 16)
-        oled.text(f'FIX:{gnss.fix_type}{"QZSS" if len(QZSS_prns) > 0 else "    "} Sat:{gnss.satellites_in_use:02d}',0,24)
+        oled.text(dt_now, 8, 16)
+        oled.text(f'FIX:{gnss.fix_type} Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
         oled.text(str(gl, 'UTF-8'), 32, 48)
         oled_lock.release()
         gnss_updatenow.clear()
@@ -174,16 +172,30 @@ def main():
     gnss_resetn.value(1)
 
     time.sleep_ms(1000)
-    uart = UART(0, baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=128)
+    uart = UART(0, baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
 
     gnss_reciever = MicropyGPS()
 
-    uart.write('$PSTMCFGCONST,2,2,0,2,0*03\r\n')
-    uart.write('$PSTMSBASSERVICE,15*6C\r\n')
-    uart.write('$PSTMSETPAR,1200,4,1*31\r\n')
-    uart.write('$PSTMSAVEPAR*58\r\n')
-    uart.write('$PSTMSRR*49\r\n')
-    time.sleep_ms(5000)
+    config_atFirst = False
+    if config_atFirst: 
+        uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n')
+        uart.write('$PSTMSBASSERVICE,15*6C\r\n')
+        uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n')
+        uart.write('$PSTMSTAGPSONOFF,1*4B\r\n')
+        uart.write('$PSTMSETPAR,1200,4,1*31\r\n')
+        uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n')
+        uart.write('$PSTMSAVEPAR*58\r\n')
+        uart.write('$PSTMSRR*49\r\n')
+        time.sleep_ms(200)
+        if uart.any():
+            s = uart.read()
+            try:
+                str_utf = str(s, 'UTF-8', "")
+                print(str_utf, end="")
+            except Exception as e:
+                print(e)
+
+        time.sleep_ms(5000)
 
     asyncio.run(gnss_read(uart, gnss_reciever))
     return -1
