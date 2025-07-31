@@ -8,7 +8,7 @@ import micropython
 
 micropython.alloc_emergency_exception_buf(100)
 
-__str_array = bytes(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+__str_array = const(bytes(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))
 
 gnss_newchar = asyncio.Event()
 readbuf_lock = asyncio.Lock()
@@ -44,7 +44,7 @@ async def uart_readgnss(uart: UART,buf: collections.deque):
                         print(str_utf, end="")
                     except Exception as e:
                         print(e)
-                        
+
         await asyncio.sleep_ms(20)
 
 async def gnss_update(gnss: MicropyGPS, buf: collections.deque):
@@ -63,25 +63,25 @@ def lat_lon_string(lat_lon):
     return f'{d:3d} {dm:06.03f}{min}{hemi}'
 
 def gridlocator_calc(lat, lon):
-    sg = bytearray()
+    sg = bytearray(8)
     d_lat, dm_lat, hemi = lat
     d_lon, dm_lon, hemi = lon
     gf_lat = (d_lat + dm_lat/60 + 90)/10
     gf_lon = (d_lon + dm_lon/60 + 180)/20
-    sg.append(__str_array[math.floor(gf_lon)])
-    sg.append(__str_array[math.floor(gf_lat)])
+    sg[0] = __str_array[math.floor(gf_lon)]
+    sg[1] = __str_array[math.floor(gf_lat)]
     gf_lat = (gf_lat - math.floor(gf_lat))*10
     gf_lon = (gf_lon - math.floor(gf_lon))*10
-    sg.append(math.floor(gf_lon) + 0x30)
-    sg.append(math.floor(gf_lat) + 0x30)
+    sg[2] = math.floor(gf_lon) + 0x30
+    sg[3] = math.floor(gf_lat) + 0x30
     gf_lat = (gf_lat - math.floor(gf_lat))*24
     gf_lon = (gf_lon - math.floor(gf_lon))*24
-    sg.append(__str_array[math.floor(gf_lon)])
-    sg.append(__str_array[math.floor(gf_lat)])
+    sg[4] = __str_array[math.floor(gf_lon)]
+    sg[5] = __str_array[math.floor(gf_lat)]
     gf_lat = (gf_lat - math.floor(gf_lat))*10
     gf_lon = (gf_lon - math.floor(gf_lon))*10
-    sg.append(math.floor(gf_lon) + 0x30)
-    sg.append(math.floor(gf_lat) + 0x30)
+    sg[6] = math.floor(gf_lon) + 0x30
+    sg[7] = math.floor(gf_lat) + 0x30
     #print(str(sg, 'UTF-8'))
     return sg
 
@@ -146,12 +146,12 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
 async def display_sync(oled:ssd1306.SSD1306_I2C):
     while True:
         await pps_irq_flag.wait()
-        state = machine.disable_irq()
+        #state = machine.disable_irq()
         await oled_lock.acquire()
         oled.show()
         oled_lock.release()
         pps_irq_flag.clear()
-        machine.enable_irq(state)
+        #machine.enable_irq(state)
 
 async def gc_coro():
     gc.enable()
