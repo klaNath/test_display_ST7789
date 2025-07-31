@@ -8,7 +8,7 @@ import micropython
 
 micropython.alloc_emergency_exception_buf(100)
 
-__str_array = const(bytes(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))
+__str_array = const(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
 
 gnss_newchar = asyncio.Event()
 readbuf_lock = asyncio.Lock()
@@ -178,25 +178,21 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
 
 
 def main():
-    gnss_resetn.value(0)
-    time.sleep_ms(100)
-    gnss_resetn.value(1)
-
-    time.sleep_ms(1000)
+    
     uart = UART(0, baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
 
     gnss_reciever = MicropyGPS()
 
     config_atFirst = False
     if config_atFirst: 
-        uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n')
-        uart.write('$PSTMSBASSERVICE,15*6C\r\n')
-        uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n')
-        uart.write('$PSTMSTAGPSONOFF,1*4B\r\n')
-        uart.write('$PSTMSETPAR,1200,4,1*31\r\n')
-        uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n')
-        uart.write('$PSTMSAVEPAR*58\r\n')
-        uart.write('$PSTMSRR*49\r\n')
+        uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n') # Set Positioning Constelation to GPS+GLONASS+GALILEO+QZSS
+        uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
+        uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n') # Use STAGPS for GPS and GLONASS
+        uart.write('$PSTMSTAGPSONOFF,1*4B\r\n') # Use STAGPS Autonomous AGPS
+        uart.write('$PSTMSETPAR,1200,4,1*31\r\n') # Use SBAS Service
+        uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n') # GSV sentence talker ID change to GN Only
+        uart.write('$PSTMSAVEPAR*58\r\n') # Save Parameters
+        uart.write('$PSTMSRR*49\r\n') # Software Reset
         time.sleep_ms(200)
         if uart.any():
             s = uart.read()
