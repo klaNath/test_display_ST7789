@@ -1,6 +1,6 @@
-import math, time, collections, gc, asyncio
+import time, collections, gc, asyncio
 from micropyGPS import MicropyGPS
-from machine import Pin, UART, I2C, RTC
+from machine import Pin, UART, I2C
 import machine
 import ssd1306
 import datetime
@@ -101,13 +101,13 @@ def gridlocator_calc(lat, lon):
     #print(str(sg, 'UTF-8'))
     return sg
 
-def datetime_toJST(gnss_date, timestamp, offset):
+def datetime_toJST(gnss_date:tuple[int,int,int], timestamp:tuple[int, int, float], offset:datetime.timedelta):
     day = int(gnss_date[0])
     month = int(gnss_date[1])
     year = int(gnss_date[2])+2000
     hour, minutes, seconds = timestamp
     #rtc.datetime((year, month, day, 0, hour, minutes, int(seconds), 0))
-    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+td_jst_wDelay
+    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+offset
     #print(dt_now_jst)
     dateobj = dt_now_jst.date()
     datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
@@ -126,7 +126,6 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         await gnss_updatenow.wait()
         if gnss.fix_type == 1:
             fix_led.toggle()
-            #print('No Fix')
         else:
             fix_led.value(1)
             day = f'{gnss.date[0]:02d}'
@@ -136,14 +135,7 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
             lat = lat_lon_string(gnss.latitude)
             lon = lat_lon_string(gnss.longitude)
             gl = gridlocator_calc(gnss.latitude, gnss.longitude)
-            dt_now = datetime_toJST(gnss.date,gnss.timestamp,offset=9)
-            #print('UTC Timestamp:', gnss.timestamp)
-            #print('Date:', date_str)
-            #print(dt_now)
-            #print('Lat:', lat, sep='')
-            #print('Lon:', lon, sep='')
-            #print('Horizontal Dilution of Precision:', gnss.hdop)
-            #print()
+            dt_now = datetime_toJST(gnss.date,gnss.timestamp, td_jst_wDelay)
         oled.fill(0)
         #QZSS_prns = [x for x in gnss.satellites_used if x >= 184]
         await oled_lock.acquire()
