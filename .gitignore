@@ -251,3 +251,7 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/circuitpython,visualstudiocode,python,cmake,c++
+test_display_ST7789.code-workspace
+test_sd.py
+test_uFileWrite.py
+test.nmea

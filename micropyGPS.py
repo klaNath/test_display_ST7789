@@ -92,6 +92,8 @@ class MicropyGPS(object):
         # Logging Related
         self.log_handle = None
         self.log_en = False
+        self.log_filename = ''
+        self.log_filemode = ''
 
         #####################
         # Data From Sentences
@@ -164,11 +166,13 @@ class MicropyGPS(object):
         mode_code = 'w' if mode == 'new' else 'a'
 
         try:
+            with open(target_file, mode_code) as f:
+                pass
             self.log_handle = open(target_file, mode_code)
         except AttributeError:
             print("Invalid FileName")
             return False
-
+        self.log_filename = target_file
         self.log_en = True
         return True
 
@@ -186,7 +190,8 @@ class MicropyGPS(object):
     def write_log(self, log_string):
         """Attempts to write the last valid NMEA sentence character to the active file handler"""
         try:
-            self.log_handle.write(log_string)
+            with open(self.log_filename, 'a') as f:
+                f.write(log_string)
         except TypeError:
             return False
         return True
