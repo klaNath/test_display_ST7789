@@ -1,5 +1,5 @@
 import time, collections, gc, asyncio, vfs, os
-from as_micropyGPS import MicropyGPS
+from alt_micropyGPS import MicropyGPS
 from machine import Pin, UART, I2C, SPI
 import ssd1306, sdcard
 import datetime
@@ -8,8 +8,6 @@ import micropython
 micropython.alloc_emergency_exception_buf(100)
 
 __str_array = const(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ') #For GridLocator Calc
-
-print('this is test as version')
 
 # Lock And EventFlag for asyncio
 gnss_newchar = asyncio.Event()
@@ -132,27 +130,38 @@ def gridlocator_calc(lat, lon):
     return sg
 
 def datetime_toJST(gnss_date:tuple[int,int,int], timestamp:tuple[int, int, float], offset:datetime.timedelta):
-    day = int(gnss_date[0])
-    month = int(gnss_date[1])
-    year = int(gnss_date[2])+2000
+    #day = int(gnss_date[0])
+    #month = int(gnss_date[1])
+    #year = int(gnss_date[2])+2000
     hour, minutes, seconds = timestamp
-    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+offset
+    dt_now_jst = datetime.datetime(
+        int(gnss_date[2])+2000,
+        int(gnss_date[1]),
+        int(gnss_date[0]),
+        hour,minutes,int(seconds),0,
+        datetime.timezone.utc)+offset
+    
     dateobj = dt_now_jst.date()
-    datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
+    #datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
     timeobj = dt_now_jst.time()
-    dt_now_jst_str = f'{datestr} {timeobj.hour:02d}:{timeobj.minute:02d}:{timeobj.second:02d}'
+    dt_now_jst_str = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d} {timeobj.hour:02d}:{timeobj.minute:02d}:{timeobj.second:02d}'
     return dt_now_jst_str
 
 def datetime_toJST_filestr(gnss_date:tuple[int,int,int], timestamp:tuple[int, int, float], offset:datetime.timedelta):
-    day = int(gnss_date[0])
-    month = int(gnss_date[1])
-    year = int(gnss_date[2])+2000
+    #day = int(gnss_date[0])
+    #month = int(gnss_date[1])
+    #year = int(gnss_date[2])+2000
     hour, minutes, seconds = timestamp
-    dt_now_jst = datetime.datetime(year, month, day, hour,minutes,int(seconds),0,datetime.timezone.utc)+offset
+    dt_now_jst = datetime.datetime(
+        int(gnss_date[2])+2000,
+        int(gnss_date[1]),
+        int(gnss_date[0]),
+        hour,minutes,int(seconds),0,
+        datetime.timezone.utc)+offset
     dateobj = dt_now_jst.date()
-    datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
+    #datestr = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}'
     timeobj = dt_now_jst.time()
-    dt_now_jst_str = f'{datestr}_{timeobj.hour:02d}{timeobj.minute:02d}{timeobj.second:02d}.nmea'
+    dt_now_jst_str = f'{dateobj.year-2000:02d}{dateobj.month:02d}{dateobj.day:02d}_{timeobj.hour:02d}{timeobj.minute:02d}{timeobj.second:02d}.nmea'
     return dt_now_jst_str
 
 async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
@@ -168,10 +177,10 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
             fix_led.toggle()
         else:
             fix_led.value(1)
-            day = f'{gnss.date[0]:02d}'
-            month = f'{gnss.date[1]:02d}'
-            year = f'{gnss.date[2]:02d}'
-            date_str = f'{year}/{month}/{day}'
+            #day = f'{gnss.date[0]:02d}'
+            #month = f'{gnss.date[1]:02d}'
+            #year = f'{gnss.date[2]:02d}'
+            #date_str = f'{gnss.date[2]:02d}/{gnss.date[1]:02d}/{gnss.date[0]:02d}'
             lat = lat_lon_string(gnss.latitude)
             lon = lat_lon_string(gnss.longitude)
             gl = gridlocator_calc(gnss.latitude, gnss.longitude)
@@ -219,11 +228,9 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
     while True:
         if det_pin.value() is 0:
             Card_Inserted.set()
-            #print('Card is Inserted!')
-
             if gnss.fix_type == MicropyGPS.__FIX_3D and gnss.valid is True:
-                spi = SPI(1, baudrate=1_000_000, sck=Pin(10), mosi=Pin(11), miso=Pin(12))
-                sd = sdcard.SDCard(spi, Pin(15), baudrate=4_000_000)
+                spi = SPI(1, baudrate=100_000, sck=Pin(10), mosi=Pin(11), miso=Pin(12))
+                sd = sdcard.SDCard(spi, Pin(15), baudrate=20_000_000)
                 await asyncio.sleep_ms(100)
                 vfs.mount(sd, '/sd')
                 os.chdir('sd')
@@ -250,7 +257,6 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
             await asyncio.sleep(1)
         elif det_pin.value() is 1:
             Card_Inserted.clear()
-            #print('Card is Not Inserted yet!')
             await asyncio.sleep(2)
 
 
@@ -260,7 +266,7 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
     i2c=I2C(1,sda=Pin(18),scl=Pin(19),freq=400000)
     oled=ssd1306.SSD1306_I2C(128,64,i2c)
 
-    buf = collections.deque('', 1024*8) # When Logging function enabled, update processing will be shorting, then Exception has rised
+    buf = collections.deque('', 1024*8) # When Logging function enabled, update processing will be shorting, then Exception has raised
     uart.init(baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=1024*2)
     await asyncio.gather(
         uart_readgnss(uart, buf),
