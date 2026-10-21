@@ -255,3 +255,5 @@ test_display_ST7789.code-workspace
 test_sd.py
 test_uFileWrite.py
 test.nmea
+
+claude_docs/
