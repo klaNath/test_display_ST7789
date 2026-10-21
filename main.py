@@ -26,8 +26,8 @@ Card_Inserted = asyncio.Event()
 td_jst_wDelay = datetime.timedelta(hours=9, seconds=1) # add 1sec Delay for display
 
 # Running Mode Config
-config_atFirst = True
-uart_outputnmea = True
+config_atFirst = False
+uart_outputnmea = False
 highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
 BUFFSIZE = const(1024*4)
 UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
