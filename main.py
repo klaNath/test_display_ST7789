@@ -4,6 +4,7 @@ from machine import Pin, UART, I2C, SPI
 import ssd1306, sdcard
 import datetime
 import micropython
+import rp2
 
 micropython.alloc_emergency_exception_buf(100)
 
@@ -25,10 +26,14 @@ Card_Inserted = asyncio.Event()
 td_jst_wDelay = datetime.timedelta(hours=9, seconds=1) # add 1sec Delay for display
 
 # Running Mode Config
-config_atFirst = False
-uart_outputnmea = False
-highspeed_logging = False
+config_atFirst = True
+uart_outputnmea = True
+highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
 BUFFSIZE = const(1024*4)
+UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
+
+# Logging state
+log_stopped_by_button = False
 
 #Tweak MicropyGPS GSV Parser
 MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
@@ -171,6 +176,10 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
     fix_led.value(0)
     while True:
         await gnss_updatenow.wait()
+        gnss_updatenow.clear()
+        # Draw only the epoch on the UTC second (hh:mm:ss.0); oled.show() runs on the next PPS
+        if gnss.timestamp[2] % 1 >= 0.05:
+            continue
         if gnss.fix_type == 1:
             fix_led.toggle()
         else:
@@ -190,7 +199,10 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(f'Lat:{lat}', 0, 0)
         oled.text(f'Lon:{lon}', 0, 8)
         oled.text(dt_now, 8, 16)
-        oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
+        if highspeed_logging: # No GSV sentence, satellites in view is unknown
+            oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/--',0,24)
+        else:
+            oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
         oled.text(f'HDOP:{gnss.hdop: 2.1f}',0,32)
         oled.text('GRID: '+str(gl, 'UTF-8'),0,40)
         oled.text(f'CRC NG:{gnss.crc_fails: 9d}',0,48)
@@ -198,8 +210,9 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(f'|   |',0, 56)
         if gnss.log_en is True:
             oled.text(f'|Log|{gnss.log_charnum/1024: 9.1f}KB',0, 56)
+        elif log_stopped_by_button:
+            oled.text(f'|Stp| Remove SD',0, 56)
         oled_lock.release()
-        gnss_updatenow.clear()
 
 async def display_sync(oled:ssd1306.SSD1306_I2C):
     while True:
@@ -221,13 +234,33 @@ async def gc_coro():
         #print(micropython.mem_info())
         await asyncio.sleep(5)
 
-async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
-    global logfile_str
+async def log_flush(gnss:MicropyGPS):
+    # Log file is kept open while logging, so sync it periodically to keep the data on card removal
     while True:
-        if det_pin.value() is 0:
+        await asyncio.sleep(2)
+        if gnss.log_en is True:
+            try:
+                gnss.flush_log()
+            except OSError as e:
+                print('flush_log: ', e)
+
+async def bootsel_watch(gnss:MicropyGPS):
+    # BOOTSEL button has no IRQ, so poll it
+    while True:
+        if rp2.bootsel_button() == 1:
+            if gnss.log_en is True:
+                logging_stop_flag.set()
+            while rp2.bootsel_button() == 1:
+                await asyncio.sleep_ms(50)
+        await asyncio.sleep_ms(100)
+
+async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
+    global logfile_str, log_stopped_by_button
+    while True:
+        if det_pin.value() == 0:
             Card_Inserted.set()
             await asyncio.sleep(1)
-            if det_pin.value() is 1:
+            if det_pin.value() == 1:
                 Card_Inserted.clear()
                 continue
             if gnss.fix_type == MicropyGPS.__FIX_3D and gnss.valid is True:
@@ -235,7 +268,7 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
                 sd = sdcard.SDCard(spi, Pin(15), baudrate=20_000_000)
                 await asyncio.sleep_ms(100)
                 vfs.mount(sd, '/sd')
-                os.chdir('sd')
+                os.chdir('/sd')
                 if 'LOG' not in os.listdir('/sd'):
                     os.mkdir('LOG')
                     print('/sd/LOG directory make')
@@ -243,6 +276,7 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
                     dt_str = datetime_toJST_filestr(gnss.date,gnss.timestamp, td_jst_wDelay)
                 logfile_str = '/sd/LOG/'+dt_str
                 print(logfile_str)
+                logging_stop_flag.clear() # discard stale stop request
                 gnss_logstart.set()
             else:
                 await asyncio.sleep(1)
@@ -255,10 +289,17 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
             vfs.umount('/sd')
             del sd
             del spi
+            if det_pin.value() == 0:
+                # Stopped by BOOTSEL button: do not restart until the card is removed
+                log_stopped_by_button = True
+                print('Logging stopped by button. Remove the card.')
+                while det_pin.value() == 0:
+                    await asyncio.sleep_ms(200)
+                log_stopped_by_button = False
             Card_Inserted.clear()
             print('Card is Removed!')
             await asyncio.sleep(1)
-        elif det_pin.value() is 1:
+        elif det_pin.value() == 1:
             Card_Inserted.clear()
             await asyncio.sleep(2)
 
@@ -268,12 +309,14 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
 
     i2c=I2C(1,sda=Pin(18),scl=Pin(19),freq=400000)
     oled=ssd1306.SSD1306_I2C(128,64,i2c)
-    uart.init(baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=BUFFSIZE>>1)
+    uart.init(baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=UART_RXBUF)
     await asyncio.gather(
         uart_readgnss(uart, gnss),
         display_update(gnss, oled),
         display_sync(oled),
         card_detect_and_loggingCtrl(gnss),
+        bootsel_watch(gnss),
+        log_flush(gnss),
         gc_coro()
     )
 
@@ -291,6 +334,7 @@ def main():
     gnss_reciever = MicropyGPS()
 
     if config_atFirst: 
+        print('Configuring GNSS Reciever...')
         uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n') # Set Positioning Constelation to GPS+GLONASS+GALILEO+QZSS
         uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
         uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n') # Use STAGPS for GPS and GLONASS
@@ -299,6 +343,12 @@ def main():
         uart.write('$PSTMSETPAR,1200,4,1*31\r\n') # Use SBAS Service
         uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n') # GSV sentence talker ID change to GN Only
         uart.write('$PSTMCFGPORT,0,0,2,115200*74\r\n') # Set UART baudrate to 115200
+        if highspeed_logging:
+            uart.write('$PSTMSETPAR,1303,0.1*35\r\n') # Set Fix Rate to 10Hz
+            uart.write('$PSTMSETPAR,1201,180000,2*0E\r\n') # Disable GSV and GLL sentence (AND NOT 0x180000)
+        else:
+            uart.write('$PSTMSETPAR,1303,1.0*35\r\n') # Set Fix Rate to 1Hz
+            uart.write('$PSTMSETPAR,1201,180000,1*0D\r\n') # Enable GSV and GLL sentence (OR 0x180000)
         uart.write('$PSTMSAVEPAR*58\r\n') # Save Parameters
         uart.write('$PSTMSRR*49\r\n') # Software Reset
         time.sleep_ms(200)
