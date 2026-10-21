@@ -1,6 +1,7 @@
 import time, collections, gc, asyncio, vfs, os
 from alt_micropyGPS import MicropyGPS
 from machine import Pin, UART, I2C, SPI
+import machine
 import ssd1306, sdcard
 import datetime
 import micropython
@@ -31,12 +32,50 @@ uart_outputnmea = False
 highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
 BUFFSIZE = const(1024*4)
 UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
+UART_READ_CHUNK = const(512)
+CPU_FREQ = const(200_000_000) # RP2350 default is 150MHz
+debug_timing = False # Print processing time statistics every second
 
 # Logging state
 log_stopped_by_button = False
 
 #Tweak MicropyGPS GSV Parser
 MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
+
+# Timing measurement (debug_timing). Times are in us, max values in the last 1 second
+class TimingStat:
+    def __init__(self):
+        self.ts_pps = (0, 0, 0.0) # gnss.timestamp at the PPS
+        self.reset()
+
+    def reset(self):
+        self.backlog = 0   # max uart.any() before read [byte]
+        self.read_max = 0  # max time of uart.read()
+        self.nbytes = 0    # total parsed bytes
+        self.parse_max = 0 # max time of parsing one read
+        self.parse_sum = 0 # total time of parsing
+        self.wlog_max = 0  # max time of write_log
+        self.wlog_slow = 0 # count of write_log over 10ms
+        self.flush_max = 0 # max time of flush_log
+        self.draw_max = 0  # max time of drawing frame buffer
+        self.show_max = 0  # max time of oled.show()
+        self.gc_max = 0    # max time of gc.collect()
+        self.loop_blk = 0  # max blocking time of the event loop
+
+tstat = TimingStat()
+
+if debug_timing:
+    _write_log_orig = MicropyGPS.write_log
+    def _write_log_timed(self, log_string):
+        t = time.ticks_us()
+        r = _write_log_orig(self, log_string)
+        dt = time.ticks_diff(time.ticks_us(), t)
+        if dt > tstat.wlog_max:
+            tstat.wlog_max = dt
+        if dt > 10_000:
+            tstat.wlog_slow += 1
+        return r
+    MicropyGPS.write_log = _write_log_timed
 
 # Pin ISR for Syncronize to PPS signal
 def detectPPS(Pin):
@@ -64,8 +103,18 @@ sg = bytearray(8)
 async def uart_readgnss(uart: UART, gnss: MicropyGPS):
     global logfile_str
     while True:
-        if uart.any():
-            s = uart.read()
+        n = uart.any()
+        if n:
+            if n > tstat.backlog:
+                tstat.backlog = n
+            t = time.ticks_us()
+            # Read only the received bytes. uart.read() without size waits timeout_char for the next char,
+            # and the chunk size is limited to give other tasks a chance to run.
+            s = uart.read(min(n, UART_READ_CHUNK))
+            dt = time.ticks_diff(time.ticks_us(), t)
+            if dt > tstat.read_max:
+                tstat.read_max = dt
+            t = time.ticks_us()
             if s is not None:
                 if uart_outputnmea:
                     try:
@@ -90,6 +139,11 @@ async def uart_readgnss(uart: UART, gnss: MicropyGPS):
                     print(f'Logging Start with filename {logfile_str}')
                     gnss_logstart.clear()
                 gnss_updatenow.set()
+                dt = time.ticks_diff(time.ticks_us(), t)
+                tstat.nbytes += len(s)
+                tstat.parse_sum += dt
+                if dt > tstat.parse_max:
+                    tstat.parse_max = dt
         else:
             await asyncio.sleep_ms(10)
             continue
@@ -173,13 +227,23 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
     lon = '000 00.000''E'
     gl = b'XX00XX00'
 
+    last_sec = -1
+    last_draw = time.ticks_ms()
+
     fix_led.value(0)
     while True:
         await gnss_updatenow.wait()
         gnss_updatenow.clear()
-        # Draw only the epoch on the UTC second (hh:mm:ss.0); oled.show() runs on the next PPS
-        if gnss.timestamp[2] % 1 >= 0.05:
-            continue
+        if highspeed_logging:
+            # Draw once per UTC second; oled.show() runs on the next PPS.
+            # Do not wait for the hh:mm:ss.0 epoch: several epochs can be parsed at once
+            # (e.g. after SD card writing), then the .0 epoch is not seen here.
+            sec = int(gnss.timestamp[2])
+            if sec == last_sec and time.ticks_diff(time.ticks_ms(), last_draw) < 1000:
+                continue
+            last_sec = sec
+            last_draw = time.ticks_ms()
+        t = time.ticks_us()
         if gnss.fix_type == 1:
             fix_led.toggle()
         else:
@@ -213,19 +277,54 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         elif log_stopped_by_button:
             oled.text(f'|Stp| Remove SD',0, 56)
         oled_lock.release()
+        dt = time.ticks_diff(time.ticks_us(), t)
+        if dt > tstat.draw_max:
+            tstat.draw_max = dt
 
-async def display_sync(oled:ssd1306.SSD1306_I2C):
+async def display_sync(oled:ssd1306.SSD1306_I2C, gnss: MicropyGPS):
     while True:
         await pps_irq_flag.wait()
+        tstat.ts_pps = gnss.timestamp
         await oled_lock.acquire()
+        t = time.ticks_us()
         oled.show()
+        dt = time.ticks_diff(time.ticks_us(), t)
         oled_lock.release()
         pps_irq_flag.clear()
+        if dt > tstat.show_max:
+            tstat.show_max = dt
+
+async def loop_monitor():
+    # Measure how long the event loop is blocked (oversleep of 10ms sleep)
+    while True:
+        t = time.ticks_us()
+        await asyncio.sleep_ms(10)
+        dt = time.ticks_diff(time.ticks_us(), t) - 10_000
+        if dt > tstat.loop_blk:
+            tstat.loop_blk = dt
+
+async def timing_report(gnss: MicropyGPS, uart: UART):
+    while True:
+        await asyncio.sleep(1)
+        h, m, s = tstat.ts_pps
+        # MicroPython does not support concatenation of adjacent f-strings with braces
+        print(f'[T] pps@{h:02d}:{m:02d}:{s:04.1f} now:{uart.any():4d}B bl:{tstat.backlog:4d}B' +
+              f' rx:{tstat.nbytes:5d}B read:{tstat.read_max/1000:5.1f}ms' +
+              f' parse:{tstat.parse_max/1000:5.1f}/{tstat.parse_sum/1000:4.0f}ms' +
+              f' wlog:{tstat.wlog_max/1000:5.1f}ms({tstat.wlog_slow})' +
+              f' flush:{tstat.flush_max/1000:5.1f} draw:{tstat.draw_max/1000:5.1f}' +
+              f' show:{tstat.show_max/1000:5.1f} gc:{tstat.gc_max/1000:5.1f}' +
+              f' blk:{tstat.loop_blk/1000:6.1f}ms crc:{gnss.crc_fails} log:{int(gnss.log_en)}')
+        tstat.reset()
 
 async def gc_coro():
     gc.enable()
     while True:
+        t = time.ticks_us()
         gc.collect()
+        dt = time.ticks_diff(time.ticks_us(), t)
+        if dt > tstat.gc_max:
+            tstat.gc_max = dt
         gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())
         # for memory debug
         #print("mem_alloc:", gc.mem_alloc())
@@ -240,7 +339,11 @@ async def log_flush(gnss:MicropyGPS):
         await asyncio.sleep(2)
         if gnss.log_en is True:
             try:
+                t = time.ticks_us()
                 gnss.flush_log()
+                dt = time.ticks_diff(time.ticks_us(), t)
+                if dt > tstat.flush_max:
+                    tstat.flush_max = dt
             except OSError as e:
                 print('flush_log: ', e)
 
@@ -310,19 +413,26 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
     i2c=I2C(1,sda=Pin(18),scl=Pin(19),freq=400000)
     oled=ssd1306.SSD1306_I2C(128,64,i2c)
     uart.init(baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=UART_RXBUF)
-    await asyncio.gather(
+    tasks = [
         uart_readgnss(uart, gnss),
         display_update(gnss, oled),
-        display_sync(oled),
+        display_sync(oled, gnss),
         card_detect_and_loggingCtrl(gnss),
         bootsel_watch(gnss),
         log_flush(gnss),
         gc_coro()
-    )
+    ]
+    if debug_timing:
+        tasks.append(loop_monitor())
+        tasks.append(timing_report(gnss, uart))
+    await asyncio.gather(*tasks)
 
 
 def main():
-    
+    # Change CPU clock before initializing UART/I2C/SPI (their baudrates depend on the clock)
+    machine.freq(CPU_FREQ)
+    print(f'CPU Freq: {machine.freq()//1_000_000}MHz')
+
     gnss_resetn.value(0)
     time.sleep_ms(100)
     gnss_resetn.value(1)
