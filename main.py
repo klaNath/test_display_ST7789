@@ -27,6 +27,8 @@ td_jst_wDelay = datetime.timedelta(hours=9, seconds=1) # add 1sec Delay for disp
 # Running Mode Config
 config_atFirst = False
 uart_outputnmea = False
+highspeed_logging = False
+BUFFSIZE = const(1024*4)
 
 #Tweak MicropyGPS GSV Parser
 MicropyGPS.supported_sentences['GNGSV'] = MicropyGPS.gpgsv
@@ -54,43 +56,39 @@ status_led.value(0)
 logfile_str = ''
 sg = bytearray(8)
 
-async def uart_readgnss(uart: UART,buf: collections.deque):
+async def uart_readgnss(uart: UART, gnss: MicropyGPS):
+    global logfile_str
     while True:
         if uart.any():
             s = uart.read()
             if s is not None:
-                await readbuf_lock.acquire()
-                buf.extend(bytearray(s))
-                readbuf_lock.release()
-                gnss_newchar.set()
                 if uart_outputnmea:
                     try:
                         str_utf = str(s, 'UTF-8', "")
                         print(str_utf, end="")
                     except Exception as e:
                         print(e)
-
+                if gnss_logstop.is_set():
+                    gnss.stop_logging()
+                    gnss_logstop.clear()
+                    gnss_logstopped.set()
+                    print('logging stopped')
+                i = 0
+                for elm in s:
+                    gnss.update(chr(elm))
+                # while s > 0:
+                #     s =- 1
+                #     gnss.update(chr(readbuf[i]))
+                #     i =+ 1
+                if gnss_logstart.is_set():
+                    gnss.start_logging(logfile_str, mode='new')
+                    print(f'Logging Start with filename {logfile_str}')
+                    gnss_logstart.clear()
+                gnss_updatenow.set()
+        else:
+            await asyncio.sleep_ms(10)
+            continue
         await asyncio.sleep(0)
-
-async def gnss_update(gnss: MicropyGPS, buf: collections.deque):
-    global logfile_str
-    while True:
-        await gnss_newchar.wait()
-        await readbuf_lock.acquire()
-        if gnss_logstop.is_set():
-            gnss.stop_logging()
-            gnss_logstop.clear()
-            gnss_logstopped.set()
-            print('logging stopped')
-        while len(buf) != 0:
-            gnss.update(chr(buf.popleft()))
-        if gnss_logstart.is_set():
-            gnss.start_logging(logfile_str, mode='new')
-            print(f'Logging Start with filename {logfile_str}')
-            gnss_logstart.clear()
-        gnss_updatenow.set()
-        gnss_newchar.clear()
-        readbuf_lock.release()
 
 def lat_lon_string(lat_lon):
     min = "'"
@@ -228,6 +226,10 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
     while True:
         if det_pin.value() is 0:
             Card_Inserted.set()
+            await asyncio.sleep(1)
+            if det_pin.value() is 1:
+                Card_Inserted.clear()
+                continue
             if gnss.fix_type == MicropyGPS.__FIX_3D and gnss.valid is True:
                 spi = SPI(1, baudrate=100_000, sck=Pin(10), mosi=Pin(11), miso=Pin(12))
                 sd = sdcard.SDCard(spi, Pin(15), baudrate=20_000_000)
@@ -252,6 +254,7 @@ async def card_detect_and_loggingCtrl(gnss:MicropyGPS):
             await gnss_logstopped.wait()
             vfs.umount('/sd')
             del sd
+            del spi
             Card_Inserted.clear()
             print('Card is Removed!')
             await asyncio.sleep(1)
@@ -265,12 +268,9 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
 
     i2c=I2C(1,sda=Pin(18),scl=Pin(19),freq=400000)
     oled=ssd1306.SSD1306_I2C(128,64,i2c)
-
-    buf = collections.deque('', 1024*8) # When Logging function enabled, update processing will be shorting, then Exception has raised
-    uart.init(baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=1024*2)
+    uart.init(baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=BUFFSIZE>>1)
     await asyncio.gather(
-        uart_readgnss(uart, buf),
-        gnss_update(gnss, buf),
+        uart_readgnss(uart, gnss),
         display_update(gnss, oled),
         display_sync(oled),
         card_detect_and_loggingCtrl(gnss),
@@ -286,7 +286,7 @@ def main():
 
     time.sleep_ms(1000)
     
-    uart = UART(0, baudrate=9600, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
+    uart = UART(0, baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
 
     gnss_reciever = MicropyGPS()
 
@@ -295,8 +295,10 @@ def main():
         uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
         uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n') # Use STAGPS for GPS and GLONASS
         uart.write('$PSTMSTAGPSONOFF,1*4B\r\n') # Use STAGPS Autonomous AGPS
+        uart.write('$PSTMSETPAR,1130,0,2*36\r\n') # Set CPU Frequency to 196MHz
         uart.write('$PSTMSETPAR,1200,4,1*31\r\n') # Use SBAS Service
         uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n') # GSV sentence talker ID change to GN Only
+        uart.write('$PSTMCFGPORT,0,0,2,115200*74\r\n') # Set UART baudrate to 115200
         uart.write('$PSTMSAVEPAR*58\r\n') # Save Parameters
         uart.write('$PSTMSRR*49\r\n') # Software Reset
         time.sleep_ms(200)
