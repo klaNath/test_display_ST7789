@@ -33,7 +33,7 @@ highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
 BUFFSIZE = const(1024*4)
 UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
 UART_READ_CHUNK = const(512)
-CPU_FREQ = const(200_000_000) # RP2350 default is 150MHz
+CPU_FREQ = const(150_000_000) # RP2350 default is 150MHz
 debug_timing = False # Print processing time statistics every second
 
 # Logging state
