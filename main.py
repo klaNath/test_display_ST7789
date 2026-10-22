@@ -30,6 +30,7 @@ td_jst_wDelay = datetime.timedelta(hours=9, seconds=1) # add 1sec Delay for disp
 config_atFirst = False
 uart_outputnmea = False
 highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
+FIX_RATE_HZ = 10 if highspeed_logging else 1
 BUFFSIZE = const(1024*4)
 UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
 UART_READ_CHUNK = const(512)
@@ -97,7 +98,7 @@ det_pin = Pin(9, Pin.IN)
 det_pin.irq(trigger=Pin.IRQ_RISING, handler=removeCard)
 
 fix_led.value(0)
-status_led.value(0)
+status_led.value(1 if highspeed_logging else 0) # Lit when the fix rate is high
 
 # global variables
 logfile_str = ''
@@ -262,12 +263,16 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(dt_now, 8, 16)
         oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
         oled.text(f'HDOP:{gnss.hdop: 2.1f}',0,32)
+        oled.text(f'{FIX_RATE_HZ:2d}Hz',96,32) # Fix rate, right aligned
         oled.text('GRID: '+str(gl, 'UTF-8'),0,40)
         oled.text(f'CRC NG:{gnss.crc_fails: 9d}',0,48)
         #oled.text(f'Elaps:{gnss.time_since_fix:10d}', 48,0)
         oled.text(f'|   |',0, 56)
         if gnss.log_en is True:
-            oled.text(f'|Log|{gnss.log_charnum/1024: 9.1f}KB',0, 56)
+            if gnss.log_charnum < 10*1024*1024:
+                oled.text(f'|Log|{gnss.log_charnum/1024: 9.1f}KB',0, 56)
+            else: # Over 10MB
+                oled.text(f'|Log|{gnss.log_charnum/(1024*1024): 9.2f}MB',0, 56)
         elif log_stopped_by_button:
             oled.text(f'|Stp| Remove SD',0, 56)
         oled_lock.release()
