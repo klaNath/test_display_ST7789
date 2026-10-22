@@ -33,6 +33,9 @@ highspeed_logging = True # Fix rate 10Hz (Display is still updated at 1Hz)
 BUFFSIZE = const(1024*4)
 UART_RXBUF = BUFFSIZE if highspeed_logging else BUFFSIZE>>1
 UART_READ_CHUNK = const(512)
+GNSS_BAUD = const(230400) # UART baudrate of the GNSS module
+GNSS_BAUD_OLD = const(115200) # Previous baudrate, used only for config_atFirst
+GNSS_BAUD_CMD = '$PSTMCFGPORT,0,0,2,230400*76\r\n' # Must match GNSS_BAUD
 CPU_FREQ = const(150_000_000) # RP2350 default is 150MHz
 debug_timing = False # Print processing time statistics every second
 
@@ -257,10 +260,7 @@ async def display_update(gnss: MicropyGPS, oled:ssd1306.SSD1306_I2C):
         oled.text(f'Lat:{lat}', 0, 0)
         oled.text(f'Lon:{lon}', 0, 8)
         oled.text(dt_now, 8, 16)
-        if highspeed_logging: # No GSV sentence, satellites in view is unknown
-            oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/--',0,24)
-        else:
-            oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
+        oled.text(f'FIX:{gnss.fix_type}  Sat:{gnss.satellites_in_use:02d}/{gnss.satellites_in_view:02d}',0,24)
         oled.text(f'HDOP:{gnss.hdop: 2.1f}',0,32)
         oled.text('GRID: '+str(gl, 'UTF-8'),0,40)
         oled.text(f'CRC NG:{gnss.crc_fails: 9d}',0,48)
@@ -406,7 +406,7 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
 
     i2c=I2C(1,sda=Pin(18),scl=Pin(19),freq=400000)
     oled=ssd1306.SSD1306_I2C(128,64,i2c)
-    uart.init(baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=UART_RXBUF)
+    uart.init(baudrate=GNSS_BAUD, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=UART_RXBUF)
     tasks = [
         uart_readgnss(uart, gnss),
         display_update(gnss, oled),
@@ -422,6 +422,33 @@ async def gnss_read(uart: UART, gnss: MicropyGPS):
     await asyncio.gather(*tasks)
 
 
+def gnss_configure(uart: UART):
+    uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n') # Set Positioning Constelation to GPS+GLONASS+GALILEO+QZSS
+    uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
+    uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n') # Use STAGPS for GPS and GLONASS
+    uart.write('$PSTMSTAGPSONOFF,1*4B\r\n') # Use STAGPS Autonomous AGPS
+    uart.write('$PSTMSETPAR,1130,0,2*36\r\n') # Set CPU Frequency to 196MHz
+    uart.write('$PSTMSETPAR,1200,4,1*31\r\n') # Use SBAS Service
+    uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n') # GSV sentence talker ID change to GN Only
+    if highspeed_logging:
+        uart.write('$PSTMSETPAR,1303,0.1*35\r\n') # Set Fix Rate to 10Hz
+        uart.write('$PSTMSETPAR,1201,80000,1*3C\r\n') # Enable GSV sentence (OR 0x80000)
+        uart.write('$PSTMSETPAR,1201,100000,2*06\r\n') # Disable GLL sentence (AND NOT 0x100000)
+    else:
+        uart.write('$PSTMSETPAR,1303,1.0*35\r\n') # Set Fix Rate to 1Hz
+        uart.write('$PSTMSETPAR,1201,180000,1*0D\r\n') # Enable GSV and GLL sentence (OR 0x180000)
+    uart.write(GNSS_BAUD_CMD) # Set UART baudrate (effective after reset)
+    uart.write('$PSTMSAVEPAR*58\r\n') # Save Parameters
+    uart.write('$PSTMSRR*49\r\n') # Software Reset
+    time.sleep_ms(200)
+    if uart.any():
+        s = uart.read()
+        try:
+            str_utf = str(s, 'UTF-8', "")
+            print(str_utf, end="")
+        except Exception as e:
+            print(e)
+
 def main():
     # Change CPU clock before initializing UART/I2C/SPI (their baudrates depend on the clock)
     machine.freq(CPU_FREQ)
@@ -433,38 +460,21 @@ def main():
 
     time.sleep_ms(1000)
     
-    uart = UART(0, baudrate=115200, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
+    uart = UART(0, baudrate=GNSS_BAUD, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
 
     gnss_reciever = MicropyGPS()
 
-    if config_atFirst: 
+    if config_atFirst:
         print('Configuring GNSS Reciever...')
-        uart.write('$PSTMCFGCONST,2,2,2,2,0*01\r\n') # Set Positioning Constelation to GPS+GLONASS+GALILEO+QZSS
-        uart.write('$PSTMSBASSERVICE,15*6C\r\n') # Set SBAS Service Auto
-        uart.write('$PSTMSTAGPSSETCONSTMASK,3*14\r\n') # Use STAGPS for GPS and GLONASS
-        uart.write('$PSTMSTAGPSONOFF,1*4B\r\n') # Use STAGPS Autonomous AGPS
-        uart.write('$PSTMSETPAR,1130,0,2*36\r\n') # Set CPU Frequency to 196MHz
-        uart.write('$PSTMSETPAR,1200,4,1*31\r\n') # Use SBAS Service
-        uart.write('$PSTMSETPAR,1200,80000,1*3D\r\n') # GSV sentence talker ID change to GN Only
-        uart.write('$PSTMCFGPORT,0,0,2,115200*74\r\n') # Set UART baudrate to 115200
-        if highspeed_logging:
-            uart.write('$PSTMSETPAR,1303,0.1*35\r\n') # Set Fix Rate to 10Hz
-            uart.write('$PSTMSETPAR,1201,180000,2*0E\r\n') # Disable GSV and GLL sentence (AND NOT 0x180000)
-        else:
-            uart.write('$PSTMSETPAR,1303,1.0*35\r\n') # Set Fix Rate to 1Hz
-            uart.write('$PSTMSETPAR,1201,180000,1*0D\r\n') # Enable GSV and GLL sentence (OR 0x180000)
-        uart.write('$PSTMSAVEPAR*58\r\n') # Save Parameters
-        uart.write('$PSTMSRR*49\r\n') # Software Reset
-        time.sleep_ms(200)
-        if uart.any():
-            s = uart.read()
-            try:
-                str_utf = str(s, 'UTF-8', "")
-                print(str_utf, end="")
-            except Exception as e:
-                print(e)
+        # The module may still work at the old baudrate, so send the config at both baudrates.
+        # New baudrate becomes effective after $PSTMSAVEPAR and $PSTMSRR.
+        for baud in (GNSS_BAUD_OLD, GNSS_BAUD):
+            print(f'Send config at {baud}bps')
+            uart.init(baudrate=baud, tx=Pin(0,Pin.OUT), rx=Pin(1, Pin.IN), timeout_char =16, rxbuf=255)
+            gnss_configure(uart)
+            time.sleep_ms(3000) # Wait for the module restart
 
-        time.sleep_ms(5000)
+        time.sleep_ms(2000)
 
     asyncio.run(gnss_read(uart, gnss_reciever))
     return -1
