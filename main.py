@@ -127,13 +127,7 @@ async def uart_readgnss(uart: UART, gnss: MicropyGPS):
                     gnss_logstop.clear()
                     gnss_logstopped.set()
                     print('logging stopped')
-                i = 0
-                for elm in s:
-                    gnss.update(chr(elm))
-                # while s > 0:
-                #     s =- 1
-                #     gnss.update(chr(readbuf[i]))
-                #     i =+ 1
+                gnss.update_bytes(s) # line by line parsing, much faster than gnss.update() for each char
                 if gnss_logstart.is_set():
                     gnss.start_logging(logfile_str, mode='new')
                     print(f'Logging Start with filename {logfile_str}')
